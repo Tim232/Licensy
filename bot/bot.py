@@ -30,6 +30,7 @@ class Licensy(commands.Bot):
         self._language_cache = {}
         self._owner = None
         self._was_ready_once = False
+        self._connected = False
 
         super().__init__(
             max_messages=None,
@@ -100,12 +101,20 @@ class Licensy(commands.Bot):
         app_info = await self.application_info()
         return app_info.owner
 
-    @staticmethod
-    async def on_connect():
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
+    @connected.setter
+    def connected(self, connected: bool):
+        self._connected = connected
+
+    async def on_connect(self):
+        self.connected = True
         logger.info("Connection to Discord established")
 
-    @staticmethod
-    async def on_disconnect():
+    async def on_disconnect(self):
+        self.connected = False
         logger.warning("Connection to Discord lost.")
 
     async def on_ready(self):
@@ -246,12 +255,13 @@ class Licensy(commands.Bot):
     @classmethod
     def _try_to_get_context(cls, *args, **kwargs) -> Union[commands.Context, None]:
         """
+        Made as a helper method for on_error event.
         Tries to extract context from *args and **kwargs, if not found returns None.
 
         Returns
         -------
         context: Union[commands.Context, None]
-            Context if found else None
+            Context if found else None. Context prefix might not be accurate.
         """
         if (ctx := kwargs.pop("ctx", None)) is not None:
             return ctx
@@ -294,11 +304,25 @@ class Licensy(commands.Bot):
             return True
 
     async def log_exception(self, exception: Exception, *, ctx: Union[commands.Context, None] = None):
+        """Similar to log_error only that this takes exception as argument and extracts the traceback."""
         traceback_msg = "".join(traceback.format_tb(exception.__traceback__))
         await self.log_error(traceback_msg, ctx=ctx)
 
     async def log_error(self, message: str, *, ctx: Union[commands.Context, None] = None):
-        if not self.is_ready() or self.is_closed():
+        """
+        Logs error message to developer Discord channel (that is set in config).
+        Method will not send message if client is disconnected or not ready and it can deal with sending multiple
+        messages if message is over the character limit.
+
+        Parameters
+        ----------
+        message: str
+            Message to send to the channel.
+        ctx: Union[commands.Context, None], default value is None
+            If you have ctx pass it and the message sent will have more information in its footer,
+            such as guild, author and channel info. Good so you know from where the error came from.
+        """
+        if not self.is_ready() or not self.connected:
             return
 
         error_log_channel = self.get_channel(self.config.LOG_CHANNEL_ID)
@@ -325,5 +349,6 @@ class Licensy(commands.Bot):
 
     @staticmethod
     def split_string_into_chunks(string: str, chunk_size: int) -> Generator[str, None, None]:
+        """Simple generator that splits string into more smaller strings (chunks)."""
         for i in range(0, len(string), chunk_size):
             yield string[i:i + chunk_size]

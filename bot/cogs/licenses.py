@@ -14,9 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 async def default_guild_reminders(ctx) -> models.ReminderActivations:
-    # self._custom_generated_pk is set in init, I don't get it in get(), thus the clone()
-    # does not get it either, but the save() needs it!? Short story clone() is broken.
-    # Just gonna use create.
+    """This is a workaround because model.copy() does not seem to be working.
+    Instead of copy method we'll just create new model with the same data and return it.
+
+    Reminder as why it doesn't seem to work:
+    self._custom_generated_pk is set in model init but we don't get it in get(), thus the clone()
+    does not get it either but the save() needs it!?
+    """
     guild_reminders = await models.ReminderActivations.get(guild__id=ctx.guild.id)
     copy = await models.ReminderActivations.create_easy(*guild_reminders.get_all_activations())
     return copy
