@@ -18,7 +18,17 @@ from bot.utils.licence_helper import LicenseFormatter
 
 
 class ReminderActivations(Model):
-    first_activation = BigIntField(default=720)
+    """
+    Reminders are when we send DM/ping to member whose license will soon expire.
+    Values here represent MINUTES before license expiration.
+    """
+    first_activation = BigIntField(
+        default=720,
+        description=(
+            "All values are in minutes representing how many minutes "
+            "before license expiration will the reminder be sent."
+        )
+    )
     second_activation = BigIntField(default=0)
     third_activation = BigIntField(default=0)
     fourth_activation = BigIntField(default=0)
@@ -67,6 +77,7 @@ class ReminderActivations(Model):
             raise FieldError("Reminder first activation has to be enabled.")
 
     def _check_activation_ranges(self):
+        """Activation value cannot be negative."""
         for activation in self.get_all_activations():
             if activation < 0:
                 raise FieldError(f"Reminder activation value {activation} cannot be negative.")
@@ -79,6 +90,7 @@ class ReminderActivations(Model):
         will reminder activate.
 
         Every next activation has to be smaller than the previous (smaller == later reminder).
+        Note that this also implies that there can be no duplicates.
         """
         activations = self.get_all_activations()
         for activation_pair in zip(activations, activations[1:]):
@@ -124,16 +136,24 @@ class Guild(Model):
         )
     )
     enable_dm_redeem = BooleanField(default=True, description="Can the redeem command also be used in bot DMs?")
-    preserve_previous_duration = BooleanField(
+    preserve_previous_duration_duplicate = BooleanField(
         default=True,
         description=(
-            "Behaviour to happen if the member redeems a role that he already has licenses for or if new role has "
-            "the same tier power&level as existing licensed role (if tier_level is >0 aka activated)."
-            "true-new duration will be sum of new duration + time remaining from the previous duration."
-            "false-duration is reset and set to new duration only."
+            "Behaviour to happen if the member redeems a role that he already has licenses for."
+            "true - new duration will be sum of new duration + time remaining from the previous duration."
+            "false - duration is reset and set to new duration only."
         )
     )
-    language = CharField(max_length=2, default="en", description="Two letter language code per ISO 639-1")
+    preserve_previous_duration_tier = BooleanField(
+        default=True,
+        description=(
+            "Behaviour to happen if the member redeems a role that already has the same tier power&level "
+            "as one of his existing licensed roles (if tier_level for both is >0 aka activated)."
+            "true - new duration will be sum of new duration + time remaining from the previous duration."
+            "false - duration is reset and set to new duration only."
+        )
+    )
+    language = CharField(max_length=2, default="en", description="Two letter language code as per ISO 639-1 standard.")
     reminders_enabled = BooleanField(
         default=True,
         description=(
@@ -213,6 +233,8 @@ class Guild(Model):
             raise FieldError(f"License branding has to be under {license_branding_maximum_length} characters.")
         elif self.timezone not in range(-12, 15):
             raise FieldError("Invalid timezone.")
+        elif any(not char.islower() for char in self.language):
+            raise FieldError("Please only use lowercase characters for guild language.")
         elif self.language not in i18n_handler.LANGUAGES or len(self.language) > language_maximum_length:
             raise FieldError("Unsupported guild language.")
 
@@ -227,27 +249,33 @@ class Guild(Model):
         return await super().create(reminder_activations=reminder_activations, **kwargs)
 
 
-class AuthorizedRole(Model):
-    # TODO this is a placeholder for future functionality
-    role_id = BigIntField()
-    guild: ForeignKeyRelation[Guild] = ForeignKeyField("models.Guild", on_delete=CASCADE)
-    authorization_level = SmallIntField(
-        default=1,
-        description="Depending on authorization level this role can use certain privileged commands from the guild."
-    )
-
-    class Meta:
-        table = "authorized_users"
-        unique_together = (("role_id", "guild"),)
-
-    async def _pre_save(self, *args, **kwargs) -> None:
-        if not (1 <= self.authorization_level <= 5):
-            raise FieldError("Authorization level has to be in 1-5 range.")
-        await super()._pre_save(*args, **kwargs)
-
-
 class Role(Model):
-    """A single role from guild."""
+    """A single role from guild.
+
+    Role can be tiered.
+    Tiers are made for the next functionality: when someone redeems a key their current role gets revoked
+    and another role gets added. By adding tiers users can specify exactly which roles would
+    be unique and when.
+
+    For example roles: supporter, donator, premium_donator
+    You don't want donator and premium_donator to ever be together so you would tier them.
+    Since premium_donator is obviously above donator you could tier them like:
+    donator tier level 1 power 1
+    premium_donator tier level 1 power 2
+
+    Now members can have supporter role along donator or premium_donator but they can't ever
+    have both the donator and premium_donator at the same time.
+    If member already has donator and tries to redeem premium_donator the donator will get removed and
+    premium_donator will get added. If it was the other way around and member has premium_donator and tries to
+    redeem donator then nothing will happen*.
+
+    *Preserving duration:
+    When replacing such tiered role, as for the duration of replaced role you can preserve it with
+    guild.preserve_previous_duration_tier boolean.
+    For the above 2 cases, when member has donator role (that will last for example for another 10h)
+    and tries to redeem premium_donator which will last 60 hours, if guild.preserve_previous_duration_tier is
+    True then premium_donator will last 10+60=70 hours, if it's false then it will last just 60 hours.
+    """
     id = BigIntField(pk=True, generated=False, description="Role ID.")
     guild: ForeignKeyRelation[Guild] = ForeignKeyField("models.Guild", on_delete=CASCADE, related_name="roles")
     tier_level = SmallIntField(
@@ -264,7 +292,6 @@ class Role(Model):
         description=(
             "Used to determine role hierarchy if member is trying to claim 2 roles from the same tier level."
             "The one with higher tier power will remain while the other one will get deactivated."
-            # TODO What happens with expiration date (if license is timed)
         )
     )
 
@@ -290,6 +317,48 @@ class Role(Model):
                     tier_power=self.tier_power
             ).exists():
                 raise IntegrityError("Can't have 2 roles with same tier level/power!")
+
+        await super()._pre_save(*args, **kwargs)
+
+
+class AuthorizedRole(Model):
+    """
+    Guild owners can authorize certain roles with certain authorization level.
+
+    Authorization level 1 can be viewed as mod permissions while level 2 can be viewed as admin
+    permissions (even if the actual role does not have moderator/admin permissions).
+    This is useful if you don't want to make someone mod/admin in your guild but still want them
+    to use privileged bot commands.
+
+    This class itself does not deal with which command can be used when - each command is decorated
+    with decorator that specifies needed authorization level.
+    """
+    role: ForeignKeyRelation[Role] = ForeignKeyField("models.Role", on_delete=CASCADE)
+    guild: ForeignKeyRelation[Guild] = ForeignKeyField("models.Guild", on_delete=CASCADE)
+    authorization_level = SmallIntField(
+        default=1,
+        description="Depending on authorization level this role can use certain privileged commands from the guild."
+    )
+
+    class Meta:
+        table = "authorized_roles"
+        unique_together = (("role", "guild"),)
+
+    async def _pre_save(self, *args, **kwargs) -> None:
+        if not (1 <= self.authorization_level <= 2):
+            raise FieldError("Authorization level has to be either 1 or 2.")
+
+        # Since we're accessing foreign attributes that might not yet
+        # be loaded (QuerySet) we should load them just in case.
+        role_guild = self.role.guild
+
+        if isinstance(role_guild, QuerySet):
+            role_guild = await self.role.guild.first()
+        if isinstance(self.guild, QuerySet):
+            self.guild = await self.guild.first()
+
+        if role_guild.id != self.guild.id:
+            raise IntegrityError("Authorized role guild mismatch.")
 
         await super()._pre_save(*args, **kwargs)
 
@@ -341,7 +410,8 @@ class PacketRole(Model):
 
     @classmethod
     async def create(cls, **kwargs) -> Model:
-        # If not specified during the creation then use the default one from role_packet.default_role_duration
+        # If duration is not specifically specified during the creation of role packet then use the default
+        # duration from role_packet.default_role_duration
         role_packet = kwargs.get("role_packet")
         duration = kwargs.pop("duration", None)
         if not duration:

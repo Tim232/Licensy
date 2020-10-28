@@ -52,7 +52,7 @@ class TestModels(test.TestCase):
         with self.assertRaises(exceptions.FieldError):
             await models.ReminderActivations.create(fifth_activation=-1)
 
-        # Test with one proper reminder that only all activations
+        # Test with one proper reminder that has all activations
         await models.ReminderActivations.create(
             first_activation=100,
             second_activation=99,
@@ -86,7 +86,6 @@ class TestModels(test.TestCase):
         )
         for wrong_dict in wrong_orders:
             with self.assertRaises(exceptions.FieldError):
-                print(wrong_dict)
                 await models.ReminderActivations.create(**wrong_dict)
 
     async def test_guild_reminders_deletion(self):
@@ -173,7 +172,7 @@ class TestModels(test.TestCase):
     async def test_guild_timezone(self):
         valid_timezone = range(-12, 15)
         # Technically some of timezones can have decimal place but we don't allow those.
-        invalid_timezone = (-100, -14, -13, -9.5, -9.3, 3.3, 15, 16, 100)
+        invalid_timezone = (-100, -14, -13, -9.5, -3.5, 3.5, 4.5, 5.5, 5.75, 6.5, 8.75, 10.5, 12.75, 15, 16, 100)
         guild = await models.Guild.create(id=123)
 
         for valid in valid_timezone:
@@ -189,8 +188,9 @@ class TestModels(test.TestCase):
         valid_languages = LANGUAGES  # Depending on defined languages in i18n_handler
         invalid_languages = (
             "",  # cannot be empty
-            "eng", "english",  # has to condone to standard (2 letter)
-            "xx"  # non-existent language
+            "e", "eng", "english",  # has to condone to standard (2 letter)
+            "xx",  # non-existent language
+            "E", "EN", "ENGLISH", "XX", "11", "!!"  # needs to consist only of lowercase characters
         )
         guild = await models.Guild.create(id=123)
 
@@ -259,15 +259,9 @@ class TestModels(test.TestCase):
 
         # tier/level is unique per guild
         with self.assertRaises(exceptions.IntegrityError):
-            await models.Role.create(id=12, guild=guild_1, tier_level=1, tier_power=1)
+            await models.Role.create(id=111, guild=guild_1, tier_level=1, tier_power=1)
         with self.assertRaises(exceptions.IntegrityError):
-            await models.Role.create(id=22, guild=guild_2, tier_level=1, tier_power=1)
-
-        # In the backend of the above unique per guild test we are fetching role
-        # since it's the only way to check for duplicates. But the role might not have the guild
-        # foreign key preloaded so we test that case too:
-        role_1 = await models.Role.get(id=11)  # this role will not have guild preloaded
-        await role_1.save()  # if we did backend of model right this should work.
+            await models.Role.create(id=222, guild=guild_2, tier_level=1, tier_power=1)
 
     async def test_role_queryset(self):
         """
@@ -283,6 +277,45 @@ class TestModels(test.TestCase):
 
         role_1 = await models.Role.get(id=11)  # this role will not have guild preloaded
         await role_1.save()  # if we did backend of model right this should work.
+
+    async def test_authorized_role_unique(self):
+        guild1 = await models.Guild.create(id=123)
+        guild2 = await models.Guild.create(id=456)
+
+        # Create some roles
+        role11 = await models.Role.create(id=11, guild=guild1)
+        role21 = await models.Role.create(id=21, guild=guild2)
+
+        # Create some authorized roles
+        await models.AuthorizedRole.create(role=role11, guild=guild1)
+        await models.AuthorizedRole.create(role=role21, guild=guild2)
+
+        # Authorized roles should be unique per guild
+        with self.assertRaises(exceptions.IntegrityError):
+            await models.AuthorizedRole.create(role=role11, guild=guild1)
+        with self.assertRaises(exceptions.IntegrityError):
+            await models.AuthorizedRole.create(role=role21, guild=guild2)
+
+        # Authorized guild and role guild need to be the same
+        with self.assertRaises(exceptions.IntegrityError):
+            await models.AuthorizedRole.create(role=role21, guild=guild1)
+        with self.assertRaises(exceptions.IntegrityError):
+            await models.AuthorizedRole.create(role=role11, guild=guild2)
+
+    async def test_authorized_role_level(self):
+        guild = await models.Guild.create(id=123)
+        role1 = await models.Role.create(id=1, guild=guild)
+        role2 = await models.Role.create(id=2, guild=guild)
+        invalid_levels = (-100, -50, -10, -5, -1, 0, 3, 4, 5, 10, 50, 100)
+
+        # TODO specific exceptions as this can pass if base integrity is raised
+        for invalid_level in invalid_levels:
+            with self.assertRaises(exceptions.FieldError):
+                await models.AuthorizedRole.create(role=role1, guild=guild, authorization_level=invalid_level)
+
+        # Valid levels are 1 and 2
+        await models.AuthorizedRole.create(role=role1, guild=guild, authorization_level=1)
+        await models.AuthorizedRole.create(role=role2, guild=guild, authorization_level=2)
 
     async def test_role_packet_unique_name(self):
         guild1 = await models.Guild.create(id=123)
@@ -416,6 +449,8 @@ class TestModels(test.TestCase):
         # If duration is specified during the creation of packet role it should use that duration
         packet_role_23 = await models.PacketRole.create(role=role23, role_packet=role_packet_2, duration=999)
         self.assertEqual(999, packet_role_23.duration)
+        # for fail-safe is someone modifies tests
+        self.assertNotEqual(role_packet_2.default_role_duration, packet_role_23.duration)
 
     async def test_packet_role_maximum_roles(self):
         guild1 = await models.Guild.create(id=123)
