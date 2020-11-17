@@ -11,7 +11,10 @@ logger = logging.getLogger(__name__)
 
 
 class TopGGApi(commands.Cog):
-    """Handles interactions with the top.gg API"""
+    """Handles interactions with the top.gg API.
+
+    This cog is only so the bot can post number of guilds it's in to top.gg bot listing.
+    """
 
     def __init__(self, bot: Licensy):
         self.bot = bot

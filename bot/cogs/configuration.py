@@ -17,7 +17,7 @@ class Configuration(commands.Cog):
     def __init__(self, bot: Licensy):
         self.bot = bot
 
-    @commands.command()
+    @commands.command(aliases=["guild_data"])
     @commands.has_permissions(manage_messages=True)
     @commands.guild_only()
     async def show_configuration(self, ctx):

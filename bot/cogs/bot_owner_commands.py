@@ -181,6 +181,7 @@ class BotOwnerCommands(commands.Cog):
             loaded_msg = (
                 f"Guild info:\n"
                 f"Name: **{guild.name}**\n"
+                f"Cached prefix {await self.bot.get_guild_prefix(ctx.guild)}"
                 f"Description: **{guild.description}**\n"
                 f"Owner ID: **{guild.owner_id}**\n"
                 f"Member count: **{guild.member_count}**\n"
