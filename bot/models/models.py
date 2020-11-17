@@ -231,27 +231,36 @@ class Guild(Model):
         table = "guilds"
 
     def __str__(self):
-        return (
-            f"Guild ID: {self.id}\n"
-            f"Custom prefix: {self.custom_prefix if self.custom_prefix else 'not set'}\n"
-            f"Custom license format: {self.custom_license_format if self.custom_license_format else 'not set'}\n"
-            f"License branding: {self.license_branding if self.license_branding else 'not set'}\n"
-            f"Timezone: {self.timezone if self.timezone else 'not set, default'}\n"
-            f"License DM redemption: {self.enable_dm_redeem}\n"
-            f"preserve_previous_duration_duplicate: {self.preserve_previous_duration_duplicate}\n"
-            f"preserve_previous_duration_tier_upgrade: {self.preserve_previous_duration_tier_upgrade}\n"
-            f"preserve_previous_duration_tier_miss: {self.preserve_previous_duration_tier_miss}\n"
-            f"Language: {self.language}\n"
-            f"Reminders enabled: {self.reminders_enabled}\n"
-            f"reminder_activations: todo\n"
-            f"Reminders channel: {self.reminders_channel_id} <#{self.reminders_channel_id}>\n"
-            f"Ping members in reminders channel: {self.reminders_ping_in_reminders_channel}\n"
-            f"Send reminders to DMs: {self.reminders_send_to_dm}\n"
-            f"License log channel enabled: {self.license_log_channel_enabled}\n"
-            f"License log channel: {self.license_log_channel_id} <#{self.license_log_channel_id}>\n"
-            f"Diagnostics channel enabled: {self.diagnostic_channel_enabled}\n"
-            f"Diagnostic channel: {self.diagnostic_channel_id} <#{self.diagnostic_channel_id}>\n"
-        )
+        messages = [
+            f"Guild ID: {self.id}",
+            f"Custom prefix: {self.custom_prefix if self.custom_prefix else 'not set'}",
+            f"Custom license format: {self.custom_license_format if self.custom_license_format else 'not set'}",
+            f"License branding: {self.license_branding if self.license_branding else 'not set'}",
+            f"Timezone: {self.timezone if self.timezone else 'not set, default'}",
+            f"License DM redemption: {self.enable_dm_redeem}",
+            f"preserve_previous_duration_duplicate: {self.preserve_previous_duration_duplicate}",
+            f"preserve_previous_duration_tier_upgrade: {self.preserve_previous_duration_tier_upgrade}",
+            f"preserve_previous_duration_tier_miss: {self.preserve_previous_duration_tier_miss}",
+            f"Language: {self.language}",
+            f"Reminders enabled: {self.reminders_enabled}"
+        ]
+
+        if self.reminders_enabled:
+            messages.extend([
+                f"Reminders channel: {self.reminders_channel_id} <#{self.reminders_channel_id}>",
+                f"Ping members in reminders channel: {self.reminders_ping_in_reminders_channel}",
+                f"Send reminders to DMs: {self.reminders_send_to_dm}"
+            ])
+
+        messages.append(f"License log channel enabled: {self.license_log_channel_enabled}")
+        if self.license_log_channel_enabled:
+            messages.append(f"License log channel: {self.license_log_channel_id} <#{self.license_log_channel_id}>\n")
+
+        messages.append(f"Diagnostics channel enabled: {self.diagnostic_channel_enabled}\n")
+        if self.diagnostic_channel_enabled:
+            messages.append(f"Diagnostic channel: {self.diagnostic_channel_id} <#{self.diagnostic_channel_id}>\n")
+
+        return "\n".join(messages)
 
     async def _post_delete(self, *args, **kwargs) -> None:
         """Deals with deleting ReminderActivations table after this table is deleted."""
