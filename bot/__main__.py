@@ -8,17 +8,26 @@ from tortoise import Tortoise
 
 from bot import Licensy
 from bot.config import DATABASE_DSN
+from bot.utils.file_handlers import NonBlockingFileHandler
 
 
 load_dotenv()
 
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
+
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s [%(name)s/%(funcName)s]", "%d-%m-%Y %H:%M:%S")
+
 console_logger = logging.getLogger("console")
 console = logging.StreamHandler(stdout)
-console.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(message)s"))
+console.setFormatter(formatter)
 console_logger.addHandler(console)
-root_logger.addHandler(console)  # TODO temporal for development stage
+
+file_handler = NonBlockingFileHandler("log.txt", encoding="utf-8")
+file_handler.setFormatter(formatter)
+root_logger.addHandler(file_handler)
+
+root_logger.addHandler(console)  # TODO temporal for development stage, remove so it doesn't spam console
 
 
 """
