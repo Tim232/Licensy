@@ -13,12 +13,13 @@ pre-commit = "*"
 [packages]
 babel = "*"
 dblpy = "*"
-discord-py = "~=1.4"
+discord-py = "~=1.5"
 psutil = "*"
 python-dateutil = "*"
 python-dotenv = "*"
 texttable = "*"
 timeago = "*"
+typing_extensions = "*"
 discord-argparse = {git = "git://github.com/albertopoljak/discord-argparse",ref = "f8e0e02"}
 tortoise-orm = {extras = ["accel"],version = "~=0.16"}
 uvloop = {version = "*",sys_platform = "!= 'win32'"}
