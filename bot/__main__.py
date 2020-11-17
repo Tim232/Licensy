@@ -23,7 +23,7 @@ console = logging.StreamHandler(stdout)
 console.setFormatter(formatter)
 console_logger.addHandler(console)
 
-file_handler = NonBlockingFileHandler("log.txt", encoding="utf-8")
+file_handler = NonBlockingFileHandler("bot/logs/log.txt", encoding="utf-8")
 file_handler.setFormatter(formatter)
 root_logger.addHandler(file_handler)
 
