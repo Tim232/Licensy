@@ -203,8 +203,10 @@ class TestModels(test.TestCase):
             with self.assertRaises(exceptions.FieldError):
                 await guild.save()
 
-    async def test_model_copy(self):
+    async def test_model_clone(self):
         # This test will fail because tortoise copy is either broken or I'm not using it as I'm supposed to?
+        # Maybe it would be best to create directly using model instead of using broken clone, like what is done
+        # in models.RegeneratingLicense.regenerate method
         await models.Guild.create(id=123)
         guild_reminders = await models.ReminderActivations.get(id=1)
         clone = guild_reminders.clone()
@@ -493,36 +495,60 @@ class TestModels(test.TestCase):
             with self.assertRaises(exceptions.FieldError):
                 await models.License.create(key=invalid, guild=guild, role_packet=role_packet)
 
-    async def test_license_uses(self):
+    async def test_license_inactive(self):
+        # TODO This will fail, figure out a way to code this
+        guild = await models.Guild.create(id=123)
+
+        test_license = await models.License.create(key="12345"*4, guild=guild)
+        test_license.inactive = True
+        await test_license.save()
+
+        with self.assertRaises(exceptions.FieldError):
+            test_license.inactive = False
+            await test_license.save()
+
+    async def test_multiple_use_license(self):
         guild = await models.Guild.create(id=123)
         role_packet = await models.RolePacket.create(guild=guild, name="packet1", default_role_duration=360)
 
         # Invalid uses left
         with self.assertRaises(exceptions.FieldError):
-            await models.License.create(key="12345"*4, guild=guild, role_packet=role_packet, uses_left=-1)
+            await models.MultipleUseLicense.create(key="12345"*4, guild=guild, role_packet=role_packet, uses_left=-1)
 
         # Too big uses left
         with self.assertRaises(exceptions.FieldError):
-            await models.License.create(
+            await models.MultipleUseLicense.create(
                 key="67890"*4,
                 guild=guild,
                 role_packet=role_packet,
-                uses_left=models.License.MAXIMUM_USES_LEFT+1
+                uses_left=models.MultipleUseLicense.MAXIMUM_USES_LEFT+1
             )
 
-    async def test_license_regenerating_mix(self):
+    async def test_regenerating_license(self):
         guild = await models.Guild.create(id=123)
         role_packet = await models.RolePacket.create(guild=guild, name="packet1", default_role_duration=360)
 
-        # License cannot be regenerating and have multiple uses at the same time.
-        with self.assertRaises(exceptions.FieldError):
-            await models.License.create(
-                key="12345"*4,
-                guild=guild,
-                role_packet=role_packet,
-                regenerating=True,
-                uses_left=10
-            )
+        regenerating_license = await models.RegeneratingLicense.create(
+            key="12345" * 4,
+            guild=guild,
+            role_packet=role_packet
+        )
+
+        new_regeneration = await regenerating_license.regenerate()
+
+        self.assertEqual(2, await models.RegeneratingLicense.all().count())
+        self.assertEqual(regenerating_license.inactive, True)
+        self.assertEqual(new_regeneration.inactive, False)
+        self.assertNotEqual(regenerating_license.key, new_regeneration.key)
+
+        # Try to do the same with queryset (not loaded foreign key), it needs to work.
+        regenerating_license_queryset = await models.RegeneratingLicense.get(key=new_regeneration.key)
+        final_regeneration = await regenerating_license_queryset.regenerate()
+
+        self.assertEqual(3, await models.RegeneratingLicense.all().count())
+        self.assertEqual(regenerating_license_queryset.inactive, True)
+        self.assertEqual(final_regeneration.inactive, False)
+        self.assertNotEqual(regenerating_license_queryset.key, final_regeneration.key)
 
     async def test_char_field_foreign_characters(self):
         # Will take prefix for example as it's a char field
@@ -532,6 +558,28 @@ class TestModels(test.TestCase):
         for valid in valid_prefix:
             guild.custom_prefix = valid
             await guild.save()
+
+    async def test_licensed_member(self):
+        guild = await models.Guild.create(id=123)
+        test_license = await models.License.create(key="12345" * 4, guild=guild)
+
+        await models.LicensedMember.create(member_id=1, license=test_license)
+
+        # license should be unique per member id
+        with self.assertRaises(exceptions.IntegrityError):
+            await models.LicensedMember.create(member_id=1, license=test_license)
+
+    async def test_licensed_role(self):
+        guild = await models.Guild.create(id=123)
+        role = await models.Role.create(id=1, guild=guild)
+        test_license = await models.License.create(key="12345" * 4, guild=guild)
+        licensed_member = await models.LicensedMember.create(member_id=1, license=test_license)
+
+        await models.LicensedRole.create(role=role, licensed_member=licensed_member)
+
+        # license role should be unique per role&licensed_member
+        with self.assertRaises(exceptions.IntegrityError):
+            await models.LicensedRole.create(role=role, licensed_member=licensed_member)
 
     @classmethod
     def tearDownClass(cls):

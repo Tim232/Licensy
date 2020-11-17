@@ -6,7 +6,7 @@ from tortoise.queryset import QuerySet
 from tortoise.exceptions import FieldError, IntegrityError
 from tortoise.fields import (
     OneToOneField, ForeignKeyRelation, ForeignKeyField, SmallIntField, IntField,
-    BigIntField, CharField, BooleanField, DatetimeField, CASCADE, SET_NULL, RESTRICT
+    BigIntField, CharField, BooleanField, DatetimeField, CASCADE, RESTRICT
 )
 
 from bot.utils import i18n_handler
@@ -104,10 +104,13 @@ class ReminderActivations(Model):
 
 
 class Guild(Model):
+    MAX_PREFIX_LENGTH = 10
+    MAX_BRANDING_LENGTH = 50
+
     """Represents Discord guild(server)."""
     id = BigIntField(pk=True, generated=False, description="Guild ID.")
     custom_prefix = CharField(
-        max_length=10,
+        max_length=MAX_PREFIX_LENGTH,
         default="",
         description=(
             "Represents guild prefix used for calling commands."
@@ -120,7 +123,7 @@ class Guild(Model):
         description="Format to use when generating license. If it's a empty string then default format is used."
     )
     license_branding = CharField(
-        max_length=50,
+        max_length=MAX_BRANDING_LENGTH,
         default="",
         description=(
             "Custom branding string to be displayed in generated license."
@@ -144,13 +147,22 @@ class Guild(Model):
             "false - duration is reset and set to new duration only."
         )
     )
-    preserve_previous_duration_tier = BooleanField(
+    preserve_previous_duration_tier_upgrade = BooleanField(
         default=True,
         description=(
-            "Behaviour to happen if the member redeems a role that already has the same tier power&level "
+            "Behaviour to happen if the member redeems a role that has the same tier power but a higher level "
             "as one of his existing licensed roles (if tier_level for both is >0 aka activated)."
             "true - new duration will be sum of new duration + time remaining from the previous duration."
             "false - duration is reset and set to new duration only."
+        )
+    )
+    preserve_previous_duration_tier_miss = BooleanField(
+        default=True,
+        description=(
+            "Behaviour to happen if the member redeems a role that has the same tier power but a lower level "
+            "as one of his existing licensed roles (if tier_level for both is >0 aka activated)."
+            "true - increase current duration with new duration"
+            "false - nothing happens."
         )
     )
     language = CharField(max_length=2, default="en", description="Two letter language code as per ISO 639-1 standard.")
@@ -163,7 +175,7 @@ class Guild(Model):
     reminder_activations = OneToOneField(
         "models.ReminderActivations",
         on_delete=RESTRICT,
-        description="Will be created upon guild creation automatically.",
+        description="Will be created upon guild creation automatically. Stores default guild reminders.",
         related_name="guild"
     )
     reminders_channel_id = BigIntField(
@@ -184,6 +196,12 @@ class Guild(Model):
             "Note: This does not affect message sending to reminder channel."
         )
     )
+    license_log_channel_enabled = BooleanField(
+        default=False,
+        description=(
+            "Whether to enable or disable license log channel."
+        )
+    )
     license_log_channel_id = BigIntField(
         default=0,
         description=(
@@ -192,6 +210,12 @@ class Guild(Model):
             "Value of 0 (or any invalid ID) will disable sending messages."
             )
         )
+    diagnostic_channel_enabled = BooleanField(
+        default=False,
+        description=(
+            "Whether to enable or disable bot diagnostics channel."
+        )
+    )
     diagnostic_channel_id = BigIntField(
         default=0,
         description=(
@@ -200,12 +224,34 @@ class Guild(Model):
             "errors that came from usage of the bot in that guild, changing any guild settings."
             "Updates about on_guild_role_delete&on_member_role_remove."
             "Usage of revoke/revoke_all/generate/delete/delete all."
-            "Value of 0 (or any invalid ID) will disable sending messages."
         )
     )
 
     class Meta:
         table = "guilds"
+
+    def __str__(self):
+        return (
+            f"Guild ID: {self.id}\n"
+            f"Custom prefix: {self.custom_prefix if self.custom_prefix else 'not set'}\n"
+            f"Custom license format: {self.custom_license_format if self.custom_license_format else 'not set'}\n"
+            f"License branding: {self.license_branding if self.license_branding else 'not set'}\n"
+            f"Timezone: {self.timezone if self.timezone else 'not set, default'}\n"
+            f"License DM redemption: {self.enable_dm_redeem}\n"
+            f"preserve_previous_duration_duplicate: {self.preserve_previous_duration_duplicate}\n"
+            f"preserve_previous_duration_tier_upgrade: {self.preserve_previous_duration_tier_upgrade}\n"
+            f"preserve_previous_duration_tier_miss: {self.preserve_previous_duration_tier_miss}\n"
+            f"Language: {self.language}\n"
+            f"Reminders enabled: {self.reminders_enabled}\n"
+            f"reminder_activations: todo\n"
+            f"Reminders channel: {self.reminders_channel_id} <#{self.reminders_channel_id}>\n"
+            f"Ping members in reminders channel: {self.reminders_ping_in_reminders_channel}\n"
+            f"Send reminders to DMs: {self.reminders_send_to_dm}\n"
+            f"License log channel enabled: {self.license_log_channel_enabled}\n"
+            f"License log channel: {self.license_log_channel_id} <#{self.license_log_channel_id}>\n"
+            f"Diagnostics channel enabled: {self.diagnostic_channel_enabled}\n"
+            f"Diagnostic channel: {self.diagnostic_channel_id} <#{self.diagnostic_channel_id}>\n"
+        )
 
     async def _post_delete(self, *args, **kwargs) -> None:
         """Deals with deleting ReminderActivations table after this table is deleted."""
@@ -266,15 +312,19 @@ class Role(Model):
     Now members can have supporter role along donator or premium_donator but they can't ever
     have both the donator and premium_donator at the same time.
     If member already has donator and tries to redeem premium_donator the donator will get removed and
-    premium_donator will get added. If it was the other way around and member has premium_donator and tries to
-    redeem donator then nothing will happen*.
+    premium_donator will get added*. If it was the other way around and member has premium_donator and tries to
+    redeem donator then nothing will happen.
 
     *Preserving duration:
-    When replacing such tiered role, as for the duration of replaced role you can preserve it with
-    guild.preserve_previous_duration_tier boolean.
+    When upgrading tiered role you can preserve the previous duration if
+    guild.preserve_previous_duration_tier_upgrade is True.
     For the above 2 cases, when member has donator role (that will last for example for another 10h)
-    and tries to redeem premium_donator which will last 60 hours, if guild.preserve_previous_duration_tier is
-    True then premium_donator will last 10+60=70 hours, if it's false then it will last just 60 hours.
+    and tries to redeem premium_donator which will last 60 hours, if guild.preserve_previous_duration_tier_upgrade is
+    True then premium_donator will last 10+60=70 hours, if it's False then it will last just 60 hours.
+
+    For reversed case, when redeeming donator role while already having a higher tier role aka premium donator,
+    duration is preserved if guild.preserve_previous_duration_tier_miss is True. Member will still only have
+    premium_donator but it's duration will increase.
     """
     id = BigIntField(pk=True, generated=False, description="Role ID.")
     guild: ForeignKeyRelation[Guild] = ForeignKeyField("models.Guild", on_delete=CASCADE, related_name="roles")
@@ -323,6 +373,7 @@ class Role(Model):
 
 class AuthorizedRole(Model):
     """
+    TODO: is this even needed?
     Guild owners can authorize certain roles with certain authorization level.
 
     Authorization level 1 can be viewed as mod permissions while level 2 can be viewed as admin
@@ -333,10 +384,19 @@ class AuthorizedRole(Model):
     This class itself does not deal with which command can be used when - each command is decorated
     with decorator that specifies needed authorization level.
     """
+
+    class AuthorizationLevel:
+        moderator = 1
+        administrator = 2
+
+        @classmethod
+        def is_valid(cls, authorization_level: int) -> bool:
+            return 1 <= authorization_level <= 2
+
     role: ForeignKeyRelation[Role] = ForeignKeyField("models.Role", on_delete=CASCADE)
     guild: ForeignKeyRelation[Guild] = ForeignKeyField("models.Guild", on_delete=CASCADE)
     authorization_level = SmallIntField(
-        default=1,
+        default=AuthorizationLevel.moderator,
         description="Depending on authorization level this role can use certain privileged commands from the guild."
     )
 
@@ -345,8 +405,8 @@ class AuthorizedRole(Model):
         unique_together = (("role", "guild"),)
 
     async def _pre_save(self, *args, **kwargs) -> None:
-        if not (1 <= self.authorization_level <= 2):
-            raise FieldError("Authorization level has to be either 1 or 2.")
+        if not self.AuthorizationLevel.is_valid(self.authorization_level):
+            raise FieldError("Authorization level out of range.")
 
         # Since we're accessing foreign attributes that might not yet
         # be loaded (QuerySet) we should load them just in case.
@@ -368,6 +428,15 @@ class RolePacket(Model):
 
     guild: ForeignKeyRelation[Guild] = ForeignKeyField("models.Guild", on_delete=CASCADE, related_name="packets")
     name = CharField(max_length=50)
+    custom_message = CharField(
+        max_length=1600,
+        default="",
+        description=(
+            # TODO custom formatter aka <role.mention> or similar.
+            "Custom message to show to member after he redeems/activates license with this role packet."
+            "If empty default generic message is showed."
+        )
+    )
     default_role_duration = IntField(
         description=(
             "Default role duration in minutes to use on new roles that don't specifically specify their own duration."
@@ -379,7 +448,9 @@ class RolePacket(Model):
         unique_together = (("name", "guild"),)
 
     async def _pre_save(self, *args, **kwargs) -> None:
-        if (max_name_length := self._meta.fields_map['name'].max_length) < len(self.name):
+        max_name_length = self._meta.fields_map['name'].max_length
+
+        if max_name_length < len(self.name):
             raise FieldError(f"Packet name has to be under {max_name_length} characters.")
         elif not self.name:
             raise FieldError("Packet name cannot be empty.")
@@ -446,30 +517,15 @@ class PacketRole(Model):
 
 class License(Model):
     KEY_MIN_LENGTH = 14
-    MAXIMUM_USES_LEFT = 1_000_000
 
     key = CharField(pk=True, generated=False, max_length=50)
     guild: ForeignKeyRelation[Guild] = ForeignKeyField("models.Guild", on_delete=CASCADE)
     reminder_activations = OneToOneField("models.ReminderActivations", on_delete=RESTRICT)
-    regenerating = BooleanField(default=False)
-    # only used if it's regenerating? I can make licensed members right at creation
-    role_packet: ForeignKeyRelation[RolePacket] = ForeignKeyField(
-        "models.RolePacket",
-        on_delete=SET_NULL,  # TODO ADD THIS TO TESTS
-        null=True,
+    inactive = BooleanField(
+        default=False,
         description=(
-            "[optional] Only used if the license is regenerating. so we know"
-            "When all roles from license expire and the license is set as regenerating we will"
-            "know which roles to re-add. Note that if the role_packet changes in the meantime it"
-            "is possible the new roles will be different from previous ones."
-        )
-
-    )
-    uses_left = SmallIntField(
-        default=1,
-        description=(
-            "Number of times this same license can be used (useful example for giveaways)."
-            "Value of 0 marks this license as deactivated and it cannot be redeemed again."
+            "Licenses that were claimed/redeemed are marked as inactive."
+            "Inactive licenses should never be activated again."
         )
     )
 
@@ -492,30 +548,74 @@ class License(Model):
     async def _pre_save(self, *args, **kwargs) -> None:
         if len(self.key) < self.KEY_MIN_LENGTH:
             raise FieldError(f"License key has to be longer than {self.KEY_MIN_LENGTH} characters.")
-        elif self.uses_left < 0:
+
+        await super()._pre_save(*args, **kwargs)
+
+
+class MultipleUseLicense(License):
+    MAXIMUM_USES_LEFT = 1_000_000
+
+    uses_left = SmallIntField(
+        default=1,
+        description=(
+            "Number of times this same license can be used (useful example for giveaways)."
+            "Value of 0 marks this license as deactivated and it cannot be redeemed again."
+        )
+    )
+
+    async def _pre_save(self, *args, **kwargs) -> None:
+        if self.uses_left < 0:
             raise FieldError("License number of uses cannot be negative.")
         elif self.uses_left > self.MAXIMUM_USES_LEFT:
             raise FieldError("License number of uses is too big.")
-        elif self.regenerating and self.uses_left > 1:
-            raise FieldError("License cannot be regenerating and have multiple-uses at the same time!")
-
-        if self.regenerating and self.uses_left == 0:
-            """Deals with regenerating licenses by creating a new licenses that has the same data as this one.
-
-            Creates new license column with new key and marks it ready for activation (uses_left=1)
-            Also copies reminder_activations data from previous license and creates new  reminder_activations table
-            with that data since it is OneToOneField.
-            """
-            guild = await self.guild
-
-            new_key = LicenseFormatter.generate_single(guild.custom_license_format, guild.license_branding)
-            new_reminder_activations = await self.reminder_activations.clone()
-
-            new_license = await self.clone(pk=new_key)
-            new_license.reminder_activations = new_reminder_activations
-            await new_license.save()
 
         await super()._pre_save(*args, **kwargs)
+
+
+class RegeneratingLicense(License):
+    role_packet: ForeignKeyRelation[RolePacket] = ForeignKeyField(
+        "models.RolePacket",
+        on_delete=CASCADE,  # TODO when deleting role packet check if there is a relationship and warn member
+        description=(
+            "When all roles from license expire and the license is set as regenerating we will"
+            "know which roles to re-add. Note that if the role_packet changes in the meantime it"
+            "is possible the new roles will be different from previous ones."
+        )
+    )
+
+    async def regenerate(self) -> "RegeneratingLicense":
+        """Deals with regenerating licenses by creating a new licenses that has the same data as this one.
+
+        Creates new license column with new key.
+        Also copies reminder_activations data from previous license and creates new  reminder_activations table
+        with that data since it is OneToOneField.
+        Marks the previous license as inactive.
+        """
+        # Since we're accessing foreign attributes that might not yet
+        # be loaded (QuerySet) we should load them just in case.
+        guild = self.guild
+        reminder_activations = self.reminder_activations
+        role_packet = self.role_packet
+
+        if isinstance(guild, QuerySet):
+            guild = await self.guild.first()
+        if isinstance(reminder_activations, QuerySet):
+            reminder_activations = await self.reminder_activations.first()
+        if isinstance(role_packet, QuerySet):
+            role_packet = await self.role_packet.first()
+
+        new_key = LicenseFormatter.generate_single(guild.custom_license_format, guild.license_branding)
+        new_reminder_activations = await reminder_activations.create_easy(*reminder_activations.get_all_activations())
+        # clone does not work in all cases, even when specifying the new key. So creating directly..
+        new_license = RegeneratingLicense(
+            key=new_key, guild=guild, reminder_activations=new_reminder_activations, role_packet=role_packet
+        )
+        await new_license.save()
+
+        self.inactive = True
+        await self.save()
+
+        return new_license
 
 
 class LicensedMember(Model):
