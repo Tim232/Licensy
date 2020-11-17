@@ -135,9 +135,10 @@ class Licensy(commands.Bot):
 
         await self._load_extensions()
         self._owner = await self._load_owner()
+        await self._startup_guild_database_check()
 
     async def _load_extensions(self):
-        allowed_extensions = ("help", "guild", "bot_information")  # TODO temporal for development stage
+        allowed_extensions = ("help", "guild", "bot_information", "licenses")  # TODO temporal for development stage
 
         for extension_path in Path("bot/cogs").glob("*.py"):
             extension_name = extension_path.stem
@@ -154,6 +155,31 @@ class Licensy(commands.Bot):
                 console_logger.info(f"Failed to load cog {dotted_path} - traceback:{traceback_msg}")
             else:
                 console_logger.info(f"\tloaded {dotted_path}")
+
+    async def _startup_guild_database_check(self):
+        """
+        Finds and adds any guilds that bot is in but are missing in the database.
+        This is mainly for rare cases of Discord API issues where weird things can happen.
+
+        Note: Never delete guilds just because database data and loaded guilds cache mismatch.
+        It's possible that Discord down-times can cause bot to not see some guilds.
+        """
+        logger.info("Starting database guild checkup..")
+        db_guild_ids = await Guild.all().values_list("id", flat=True)
+
+        for guild in self.guilds:
+            if guild.id not in db_guild_ids:
+                message = f"Guild {guild.id} {guild} found in cache but not registered in database!"
+                logger.critical(message)
+                await self.log_error(message)
+
+                await Guild.create(id=guild.id)
+
+                success_message = f"Missing guild {guild.id} {guild} successfully registered in database."
+                logger.critical(success_message)
+                await self.log_error(success_message)
+
+        logger.info("Database guild checkup done!")
 
     async def on_command_error(self, context: commands.Context, exception: Exception):
         ctx = context
