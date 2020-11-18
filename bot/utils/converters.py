@@ -111,7 +111,7 @@ class NonNegativeInteger(Converter):
             return non_negative_integer
 
 
-class PositiveInteger(Converter):
+class PositiveInteger(int, Converter):
     async def convert(self, ctx: Context, argument: str) -> int:
         """
         Converts argument to positive integer (>0).

@@ -3,6 +3,7 @@ import time
 import psutil
 import logging
 
+import timeago
 import discord
 from discord.ext import commands, tasks
 
@@ -10,8 +11,9 @@ from bot import Licensy
 from bot.utils.licence_helper import get_current_time
 from bot.utils.message_handler import new_vote_message
 from bot.utils.activities import ActivityCycle, DynamicActivity
+from bot.utils.misc import construct_load_bar, embed_space
 from bot.utils.embed_handler import info, success, construct_embed, suggestion
-from bot.utils.misc import construct_load_bar_string, time_ago, embed_space
+
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +21,10 @@ logger = logging.getLogger(__name__)
 class BotInformation(commands.Cog):
     def __init__(self, bot: Licensy):
         self.bot = bot
-        self.process = psutil.Process(os.getpid())
         self.activities = ActivityCycle()
         self.add_activities()
         self.activity_loop.start()
+        self.process = psutil.Process(os.getpid())
 
     def cog_unload(self):
         self.activity_loop.cancel()
@@ -193,67 +195,64 @@ class BotInformation(commands.Cog):
         await ctx.send(embed=info(msg, ctx.me, title="Source code"))
 
     @commands.command(aliases=("status", "statistics", "about"))
-    @commands.cooldown(1, 10, commands.BucketType.guild)
+    @commands.cooldown(1, 30, commands.BucketType.guild)
     async def stats(self, ctx):
         """
         Shows bot information (stats/links/etc).
-
         """
-        avg_users = round(len(self.bot.users) / len(self.bot.guilds))
-
-        active_licenses = 0
-        stored_licenses = 0
-
         bot_ram_usage = self.process.memory_full_info().rss / 1024 ** 2
         bot_ram_usage = f"{bot_ram_usage:.2f} MB"
-        bot_ram_usage_field = construct_load_bar_string(self.process.memory_percent(), bot_ram_usage)
+        bot_ram_usage_bar = construct_load_bar(self.process.memory_percent(), bot_ram_usage)
 
         virtual_memory = psutil.virtual_memory()
         server_ram_usage = f"{virtual_memory.used/1024/1024:.0f} MB"
-        server_ram_usage_field = construct_load_bar_string(virtual_memory.percent, server_ram_usage)
+        server_ram_usage_bar = construct_load_bar(virtual_memory.percent, server_ram_usage)
 
         cpu_count = psutil.cpu_count()
 
         bot_cpu_usage = self.process.cpu_percent()
-        if bot_cpu_usage > 100:
-            bot_cpu_usage = bot_cpu_usage / cpu_count
-        bot_cpu_usage_field = construct_load_bar_string(bot_cpu_usage)
+        bot_cpu_usage = bot_cpu_usage if bot_cpu_usage <= 100 else bot_cpu_usage / cpu_count
+        bot_cpu_usage_bar = construct_load_bar(bot_cpu_usage)
 
         server_cpu_usage = psutil.cpu_percent()
-        if server_cpu_usage > 100:
-            server_cpu_usage = server_cpu_usage / cpu_count
-        server_cpu_usage_field = construct_load_bar_string(server_cpu_usage)
+        server_cpu_usage = server_cpu_usage if server_cpu_usage <=100 else server_cpu_usage / cpu_count
+        server_cpu_usage_bar = construct_load_bar(server_cpu_usage)
 
         io_counters = self.process.io_counters()
         io_read_bytes = f"{io_counters.read_bytes/1024/1024:.3f}MB"
         io_write_bytes = f"{io_counters.write_bytes/1024/1024:.3f}MB"
 
-        footer = (f"[Invite]({self.get_bot_invite_link()})"
-                  f" | [Donate]({self.bot.config.PATREON_LINK})"
-                  f" | [Support server]({self.bot.config.SUPPORT_CHANNEL_INVITE})"
-                  f" | [Vote]({self.bot.config.TOP_GG_VOTE_LINK})"
-                  f" | [Github]({self.bot.config.SOURCE_CODE_LINK})")
+        footer = (
+            f"[Invite]({self.get_bot_invite_link()})"
+            f" | [Donate]({self.bot.config.PATREON_LINK})"
+            f" | [Support server]({self.bot.config.SUPPORT_CHANNEL_INVITE})"
+            f" | [Vote]({self.bot.config.TOP_GG_VOTE_LINK})"
+            f" | [Github]({self.bot.config.SOURCE_CODE_LINK})"
+        )
 
         # The weird numbers is just guessing number of spaces so the lines align
         # Needed since embeds are not monospaced font
-        field_content = (f"**Bot RAM usage:**{embed_space*7}{bot_ram_usage_field}\n"
-                         f"**Server RAM usage:**{embed_space}{server_ram_usage_field}\n"
-                         f"**Bot CPU usage:**{embed_space*9}{bot_cpu_usage_field}\n"
-                         f"**Server CPU usage:**{embed_space*3}{server_cpu_usage_field}\n"
-                         f"**IO (r/w):** {io_read_bytes} / {io_write_bytes}\n"
-                         f"\n**Links:\n**" + footer)
+        field_content = (
+            f"**Bot RAM usage:**{embed_space*7}{bot_ram_usage_bar}\n"
+            f"**Server RAM usage:**{embed_space}{server_ram_usage_bar}\n"
+            f"**Bot CPU usage:**{embed_space*9}{bot_cpu_usage_bar}\n"
+            f"**Server CPU usage:**{embed_space*3}{server_cpu_usage_bar}\n"
+            f"**IO (r/w):** {io_read_bytes} / {io_write_bytes}\n"
+            f"\n**Links:\n**" + footer
+        )
 
-        fields = {"Last boot": self.last_boot(),
-                  "Developer": self.bot.owner_mention,
-                  "Library": f"discord.py {discord.__version__}",
-                  "Servers": len(self.bot.guilds),
-                  "Average users:": f"{avg_users} users/server",
-                  "Total users": len(self.bot.users),
-                  "Commands": len(self.bot.commands),
-                  "Active licenses:": active_licenses,
-                  "Stored licenses:": stored_licenses,
-                  "Server info": field_content,
-                  }
+        fields = {
+            "Last boot": self.last_boot(),
+            "Developer": self.bot.owner_mention,
+            "Library": f"discord.py {discord.__version__}",
+            "Servers": len(self.bot.guilds),
+            "Average users:": f"{round(len(self.bot.users) / len(self.bot.guilds))} users/server",
+            "Total users": len(self.bot.users),
+            "Commands": len(self.bot.commands),
+            "Active licenses:": 0,
+            "Stored licenses:": 0,
+            "Server info": field_content,
+        }
 
         embed = construct_embed(ctx.me, **fields)
         await ctx.send(embed=embed)
@@ -294,7 +293,7 @@ class BotInformation(commands.Cog):
         last boot time (str)
             Boot time in humanized form aka description instead of numerals (eg. 2 hours ago, 1 week ago etc)
         """
-        return time_ago(get_current_time() - self.bot.up_time_start_time)
+        return timeago.format(get_current_time() - self.bot.up_time_start_time)
 
     def get_bot_invite_link(self) -> str:
         """

@@ -3,7 +3,7 @@ from typing import Tuple
 from tortoise.models import Model
 from tortoise.query_utils import Q
 from tortoise.queryset import QuerySet
-from tortoise.exceptions import FieldError, IntegrityError
+from tortoise.exceptions import FieldError, IntegrityError, DoesNotExist
 from tortoise.fields import (
     OneToOneField, ForeignKeyRelation, ForeignKeyField, SmallIntField, IntField,
     BigIntField, CharField, BooleanField, DatetimeField, CASCADE, RESTRICT
@@ -165,6 +165,14 @@ class Guild(Model):
             "false - nothing happens."
         )
     )
+    nuke_data_on_member_leave = BooleanField(
+        default=True,
+        description=(
+            "If bot gets event that member has left certain guild then all of that member data from that guild"
+            "(active subscriptions etc) are immediately deleted. If False then nothing happens, data will get "
+            "removed as usual - when time expires."
+        )
+    )
     language = CharField(max_length=2, default="en", description="Two letter language code as per ISO 639-1 standard.")
     reminders_enabled = BooleanField(
         default=True,
@@ -186,7 +194,7 @@ class Guild(Model):
         )
     )
     reminders_ping_in_reminders_channel = BooleanField(
-        default=True,
+        default=False,
         description="Whether to ping the reminding member when sending to reminders channel."
     )
     reminders_send_to_dm = BooleanField(
@@ -241,13 +249,15 @@ class Guild(Model):
             f"preserve_previous_duration_duplicate: {self.preserve_previous_duration_duplicate}",
             f"preserve_previous_duration_tier_upgrade: {self.preserve_previous_duration_tier_upgrade}",
             f"preserve_previous_duration_tier_miss: {self.preserve_previous_duration_tier_miss}",
+            f"nuke_data_on_member_leave: {self.nuke_data_on_member_leave}",
             f"Language: {self.language}",
             f"Reminders enabled: {self.reminders_enabled}"
         ]
 
         if self.reminders_enabled:
+            reminders_channel = "Not set" if self.reminders_channel_id == 0 else f"{self.reminders_channel_id} <#{self.reminders_channel_id}>"
             messages.extend([
-                f"Reminders channel: {self.reminders_channel_id} <#{self.reminders_channel_id}>",
+                f"Reminders channel: {reminders_channel}",
                 f"Ping members in reminders channel: {self.reminders_ping_in_reminders_channel}",
                 f"Send reminders to DMs: {self.reminders_send_to_dm}"
             ])
@@ -357,6 +367,26 @@ class Role(Model):
     class Meta:
         table = "roles"
         unique_together = (("guild", "id"),)
+
+    @classmethod
+    async def get_or_create_easy(cls, guild_id: int, role_id: int) -> "Role":
+        """Dunno how to make built-in get_or_create work with foreign key so using this helper.
+        Below does not work:
+        role = await models.Role.get_or_create(
+            id=role.id,
+            defaults={
+                "guild__id": ctx.guild.id,
+                "tier_level": tier_level,
+                "tier_power": tier_power
+            }
+        )
+
+        """
+        try:
+            return await cls.get(id=role_id)
+        except DoesNotExist:
+            guild = await Guild.get(id=guild_id)
+            return await cls.create(guild=guild, id=role_id)
 
     async def _pre_save(self, *args, **kwargs) -> None:
         if not (0 <= self.tier_level <= 100):
